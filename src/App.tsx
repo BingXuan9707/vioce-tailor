@@ -5,6 +5,7 @@ import { Waveform } from './components/Waveform'
 import { PlaybackControls } from './components/PlaybackControls'
 import { TrimControls } from './components/TrimControls'
 import { ExportButton } from './components/ExportButton'
+import { Timeline } from './components/Timeline'
 import { exportAudio, exportMergedAudio, AudioSegment, ExportFormat } from './utils/audioUtils'
 
 interface AudioFile {
@@ -455,27 +456,7 @@ function App() {
             ))}
 
             {audioFiles.length >= 2 && (
-              <div className="bg-gradient-to-r from-indigo-50 to-green-50 rounded-xl p-6">
-                <h3 className="font-semibold text-gray-800 mb-3">🎵 拼接预览</h3>
-                <div className="flex flex-wrap items-center gap-2">
-                  {audioFiles.map((file, index) => (
-                    <div key={file.id} className="flex items-center">
-                      <div 
-                        className="px-3 py-1 rounded-full text-sm font-medium"
-                        style={{ backgroundColor: `${colors[index % colors.length].wave}20`, color: colors[index % colors.length].wave }}
-                      >
-                        {file.fileName} ({(file.endTrim - file.startTrim).toFixed(2)}s)
-                      </div>
-                      {index < audioFiles.length - 1 && (
-                        <span className="mx-2 text-gray-400">→</span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-                <p className="mt-3 text-sm text-gray-600">
-                  总时长: {audioFiles.reduce((acc, f) => acc + (f.endTrim - f.startTrim), 0).toFixed(2)} 秒
-                </p>
-              </div>
+              <Timeline audioFiles={audioFiles} colors={colors} />
             )}
           </div>
         )}
