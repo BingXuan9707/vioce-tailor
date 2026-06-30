@@ -117,7 +117,15 @@ export function Waveform({
     wavesurferRef.current = wavesurfer
 
     return () => {
-      wavesurfer.destroy()
+      try {
+        if (wavesurferRef.current) {
+          wavesurferRef.current.pause()
+        }
+        wavesurfer.destroy()
+      } catch {
+      }
+      wavesurferRef.current = null
+      regionRef.current = null
       initializedRef.current = false
     }
   }, [audioUrl])

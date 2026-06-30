@@ -42,33 +42,56 @@ function App() {
     const arrayBuffer = await selectedFile.arrayBuffer()
     const audioBuffer = await audioContext.decodeAudioData(arrayBuffer)
 
-    const newAudioFile: AudioFile = {
-      id: Date.now().toString(),
-      file: selectedFile,
-      fileName,
-      audioUrl: url,
-      duration: audioBuffer.duration,
-      currentTime: 0,
-      isPlaying: false,
-      startTrim: 0,
-      endTrim: audioBuffer.duration,
-      isLoaded: false,
-      buffer: audioBuffer,
-    }
-
     if (index !== undefined) {
       setAudioFiles(prev => {
         const newFiles = [...prev]
-        newFiles[index] = newAudioFile
+        const oldFile = newFiles[index]
+        if (oldFile && oldFile.audioUrl) {
+          URL.revokeObjectURL(oldFile.audioUrl)
+        }
+        newFiles[index] = {
+          id: Date.now().toString(),
+          file: selectedFile,
+          fileName,
+          audioUrl: url,
+          duration: audioBuffer.duration,
+          currentTime: 0,
+          isPlaying: false,
+          startTrim: 0,
+          endTrim: audioBuffer.duration,
+          isLoaded: false,
+          buffer: audioBuffer,
+        }
         return newFiles
       })
     } else {
+      const newAudioFile: AudioFile = {
+        id: Date.now().toString(),
+        file: selectedFile,
+        fileName,
+        audioUrl: url,
+        duration: audioBuffer.duration,
+        currentTime: 0,
+        isPlaying: false,
+        startTrim: 0,
+        endTrim: audioBuffer.duration,
+        isLoaded: false,
+        buffer: audioBuffer,
+      }
       setAudioFiles(prev => [...prev, newAudioFile])
     }
   }, [getAudioContext])
 
   const handleAddAnotherFile = useCallback(() => {
     setIsMergingMode(true)
+    setReplaceIndex(undefined)
+  }, [])
+
+  const [replaceIndex, setReplaceIndex] = useState<number | undefined>(undefined)
+
+  const handleReplaceFile = useCallback((index: number) => () => {
+    setIsMergingMode(true)
+    setReplaceIndex(index)
   }, [])
 
   const handleAudioReady = useCallback((index: number) => (duration: number) => {
@@ -370,9 +393,9 @@ function App() {
                         </button>
                       )}
                       <button
-                        onClick={() => handleFileSelect(file.file, index)}
-                        className="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors"
-                      >
+                          onClick={handleReplaceFile(index)}
+                          className="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors"
+                        >
                         更换
                       </button>
                     </div>
@@ -459,10 +482,23 @@ function App() {
 
         {isMergingMode && audioFiles.length > 0 && (
           <div className="mt-6 bg-white rounded-xl p-6 shadow-lg">
-            <h3 className="text-lg font-semibold text-gray-800 mb-4">添加另一个音频文件进行拼接</h3>
-            <AudioUploader onFileSelect={handleFileSelect} />
+            <h3 className="text-lg font-semibold text-gray-800 mb-4">
+              {replaceIndex !== undefined 
+                ? `替换文件 ${replaceIndex + 1}` 
+                : '添加另一个音频文件进行拼接'}
+            </h3>
+            <AudioUploader 
+              onFileSelect={(file) => {
+                handleFileSelect(file, replaceIndex)
+                setIsMergingMode(false)
+                setReplaceIndex(undefined)
+              }} 
+            />
             <button
-              onClick={() => setIsMergingMode(false)}
+              onClick={() => {
+                setIsMergingMode(false)
+                setReplaceIndex(undefined)
+              }}
               className="mt-4 px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
             >
               取消
