@@ -22,8 +22,18 @@ interface AudioFile {
   buffer: AudioBuffer | null
 }
 
+interface Clip {
+  id: string
+  fileId: string
+  fileName: string
+  sourceStart: number
+  sourceEnd: number
+  position: number
+}
+
 function App() {
   const [audioFiles, setAudioFiles] = useState<AudioFile[]>([])
+  const [clips, setClips] = useState<Clip[]>([])
   const [isMergingMode, setIsMergingMode] = useState(false)
   const [exportFormat, setExportFormat] = useState<ExportFormat>('wav-compressed')
   const [quality, setQuality] = useState<'low' | 'medium' | 'high'>('medium')
@@ -43,6 +53,8 @@ function App() {
     const arrayBuffer = await selectedFile.arrayBuffer()
     const audioBuffer = await audioContext.decodeAudioData(arrayBuffer)
 
+    const fileId = Date.now().toString()
+    
     if (index !== undefined) {
       setAudioFiles(prev => {
         const newFiles = [...prev]
@@ -51,7 +63,7 @@ function App() {
           URL.revokeObjectURL(oldFile.audioUrl)
         }
         newFiles[index] = {
-          id: Date.now().toString(),
+          id: fileId,
           file: selectedFile,
           fileName,
           audioUrl: url,
@@ -65,9 +77,24 @@ function App() {
         }
         return newFiles
       })
+      setClips(prev => {
+        const newClips = [...prev]
+        const clipIndex = newClips.findIndex(c => c.fileId === audioFiles[index]?.id)
+        if (clipIndex !== -1) {
+          newClips[clipIndex] = {
+            ...newClips[clipIndex],
+            id: fileId,
+            fileId,
+            fileName,
+            sourceStart: 0,
+            sourceEnd: audioBuffer.duration,
+          }
+        }
+        return newClips
+      })
     } else {
       const newAudioFile: AudioFile = {
-        id: Date.now().toString(),
+        id: fileId,
         file: selectedFile,
         fileName,
         audioUrl: url,
@@ -80,8 +107,20 @@ function App() {
         buffer: audioBuffer,
       }
       setAudioFiles(prev => [...prev, newAudioFile])
+      setClips(prev => {
+        const lastClip = prev[prev.length - 1]
+        const position = lastClip ? lastClip.position + (lastClip.sourceEnd - lastClip.sourceStart) : 0
+        return [...prev, {
+          id: fileId,
+          fileId,
+          fileName,
+          sourceStart: 0,
+          sourceEnd: audioBuffer.duration,
+          position,
+        }]
+      })
     }
-  }, [getAudioContext])
+  }, [getAudioContext, audioFiles])
 
   const handleAddAnotherFile = useCallback(() => {
     setIsMergingMode(true)
@@ -239,14 +278,18 @@ function App() {
   }, [audioFiles, exportFormat, quality])
 
   const handleExportMerged = useCallback(async () => {
-    const segments: AudioSegment[] = audioFiles
-      .filter(f => f.buffer && f.endTrim > f.startTrim)
-      .map(f => ({
-        buffer: f.buffer!,
-        start: f.startTrim,
-        end: f.endTrim,
-        fileName: f.fileName,
-      }))
+    const segments: AudioSegment[] = clips
+      .map(clip => {
+        const file = audioFiles.find(f => f.id === clip.fileId)
+        if (!file || !file.buffer || clip.sourceEnd <= clip.sourceStart) return null
+        return {
+          buffer: file.buffer,
+          start: clip.sourceStart,
+          end: clip.sourceEnd,
+          fileName: clip.fileName,
+        }
+      })
+      .filter((s): s is AudioSegment => s !== null)
 
     if (segments.length >= 2) {
       const outputName = segments.map(s => s.fileName).join('_')
@@ -255,10 +298,13 @@ function App() {
         quality,
       })
     }
-  }, [audioFiles, exportFormat, quality])
+  }, [clips, audioFiles, exportFormat, quality])
 
   const canExportSingle = (file: AudioFile) => file.buffer && file.endTrim > file.startTrim && file.isLoaded
-  const canExportMerged = audioFiles.filter(f => canExportSingle(f)).length >= 2
+  const canExportMerged = clips.filter(c => {
+    const file = audioFiles.find(f => f.id === c.fileId)
+    return file && file.buffer && c.sourceEnd > c.sourceStart
+  }).length >= 2
 
   const colors = [
     { wave: '#4F46E5', progress: '#818CF8', region: 'rgba(99, 102, 241, 0.3)' },
@@ -455,31 +501,11 @@ function App() {
               </div>
             ))}
 
-            {audioFiles.length >= 2 && (
+            {clips.length >= 2 && (
               <Timeline 
-                audioFiles={audioFiles} 
+                clips={clips} 
                 colors={colors}
-                onTrimChange={(index, start, end) => {
-                  setAudioFiles(prev => {
-                    const newFiles = [...prev]
-                    newFiles[index] = {
-                      ...newFiles[index],
-                      startTrim: start,
-                      endTrim: end,
-                    }
-                    return newFiles
-                  })
-                }}
-                onRemoveFile={(index) => {
-                  setAudioFiles(prev => {
-                    const newFiles = [...prev]
-                    const removedFile = newFiles[index]
-                    if (removedFile && removedFile.audioUrl) {
-                      URL.revokeObjectURL(removedFile.audioUrl)
-                    }
-                    return newFiles.filter((_, i) => i !== index)
-                  })
-                }}
+                onClipsChange={setClips}
               />
             )}
           </div>

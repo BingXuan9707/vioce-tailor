@@ -1,39 +1,39 @@
 import { useMemo, useState, useCallback, useRef } from 'react'
 
-interface AudioFileData {
+interface Clip {
   id: string
+  fileId: string
   fileName: string
-  duration: number
-  startTrim: number
-  endTrim: number
+  sourceStart: number
+  sourceEnd: number
+  position: number
 }
 
 interface TimelineProps {
-  audioFiles: AudioFileData[]
+  clips: Clip[]
   colors: {
     wave: string
     progress: string
     region: string
   }[]
-  onTrimChange: (index: number, start: number, end: number) => void
-  onRemoveFile: (index: number) => void
+  onClipsChange: (clips: Clip[]) => void
 }
 
-export function Timeline({ audioFiles, colors, onTrimChange, onRemoveFile }: TimelineProps) {
-  const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
+export function Timeline({ clips, colors, onClipsChange }: TimelineProps) {
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   const [currentTime, setCurrentTime] = useState(0)
   const [isDragging, setIsDragging] = useState(false)
   const [dragType, setDragType] = useState<'start' | 'end' | 'move' | null>(null)
-  const [dragIndex, setDragIndex] = useState<number | null>(null)
+  const [dragClipId, setDragClipId] = useState<string | null>(null)
+  const [history, setHistory] = useState<Clip[][]>([])
+  const [historyIndex, setHistoryIndex] = useState(-1)
   const timelineRef = useRef<HTMLDivElement>(null)
 
   const totalDuration = useMemo(() => {
-    return audioFiles.reduce((acc, f) => acc + (f.endTrim - f.startTrim), 0)
-  }, [audioFiles])
-
-  const maxDuration = useMemo(() => {
-    return Math.max(totalDuration, ...audioFiles.map(f => f.duration))
-  }, [audioFiles, totalDuration])
+    if (clips.length === 0) return 0
+    const lastClip = clips[clips.length - 1]
+    return lastClip.position + (lastClip.sourceEnd - lastClip.sourceStart)
+  }, [clips])
 
   const formatTime = (seconds: number): string => {
     const hours = Math.floor(seconds / 3600)
@@ -48,102 +48,182 @@ export function Timeline({ audioFiles, colors, onTrimChange, onRemoveFile }: Tim
   }
 
   const timeMarkers = useMemo(() => {
-    const markers = []
-    const step = Math.max(1, Math.floor(maxDuration / 20))
-    for (let i = 0; i <= maxDuration; i += step) {
+    const markers: number[] = []
+    if (totalDuration === 0) return markers
+    const step = Math.max(1, Math.floor(totalDuration / 20))
+    for (let i = 0; i <= totalDuration; i += step) {
       markers.push(i)
     }
     return markers
-  }, [maxDuration])
+  }, [totalDuration])
 
   const getTimelinePosition = (time: number) => {
-    if (maxDuration === 0) return 0
-    return (time / maxDuration) * 100
+    if (totalDuration === 0) return 0
+    return (time / totalDuration) * 100
   }
 
   const getTimeFromPosition = (positionPercent: number) => {
-    return (positionPercent / 100) * maxDuration
+    return (positionPercent / 100) * totalDuration
   }
 
-  const audioSegments = useMemo(() => {
-    const segments: {
-      id: string
-      fileName: string
-      start: number
-      end: number
-      color: string
-      position: number
-      duration: number
-      index: number
-    }[] = []
-    let currentPosition = 0
-    audioFiles.forEach((file, index) => {
-      const clipDuration = file.endTrim - file.startTrim
-      segments.push({
-        id: file.id,
-        fileName: file.fileName,
-        start: file.startTrim,
-        end: file.endTrim,
-        color: colors[index % colors.length].wave,
-        position: currentPosition,
-        duration: clipDuration,
-        index,
-      })
-      currentPosition += clipDuration
-    })
-    return segments
-  }, [audioFiles, colors])
+  const saveToHistory = useCallback((newClips: Clip[]) => {
+    const newHistory = history.slice(0, historyIndex + 1)
+    newHistory.push(JSON.parse(JSON.stringify(newClips)))
+    setHistory(newHistory)
+    setHistoryIndex(newHistory.length - 1)
+  }, [history, historyIndex])
 
-  const handleMouseDown = useCallback((e: React.MouseEvent, type: 'start' | 'end' | 'move', index: number) => {
+  const handleUndo = useCallback(() => {
+    if (historyIndex > 0) {
+      const prevIndex = historyIndex - 1
+      setHistoryIndex(prevIndex)
+      onClipsChange(JSON.parse(JSON.stringify(history[prevIndex])))
+    }
+  }, [historyIndex, history, onClipsChange])
+
+  const handleRedo = useCallback(() => {
+    if (historyIndex < history.length - 1) {
+      const nextIndex = historyIndex + 1
+      setHistoryIndex(nextIndex)
+      onClipsChange(JSON.parse(JSON.stringify(history[nextIndex])))
+    }
+  }, [historyIndex, history, onClipsChange])
+
+  const handleMouseDown = useCallback((e: React.MouseEvent, type: 'start' | 'end' | 'move', clipId: string) => {
     e.stopPropagation()
     setIsDragging(true)
     setDragType(type)
-    setDragIndex(index)
+    setDragClipId(clipId)
     
     if (type !== 'move') {
-      setSelectedIndex(index)
+      setSelectedId(clipId)
     }
   }, [])
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!isDragging || dragIndex === null || !timelineRef.current) return
+    if (!isDragging || dragClipId === null || !timelineRef.current) return
 
     const rect = timelineRef.current.getBoundingClientRect()
     const x = e.clientX - rect.left
     const positionPercent = (x / rect.width) * 100
-    
     const time = getTimeFromPosition(positionPercent)
 
+    const clipIndex = clips.findIndex(c => c.id === dragClipId)
+    if (clipIndex === -1) return
+
+    const clip = clips[clipIndex]
+    const clipDuration = clip.sourceEnd - clip.sourceStart
+    const clipEndPosition = clip.position + clipDuration
+
     if (dragType === 'start') {
-      const endTrim = audioFiles[dragIndex].endTrim
-      const newStart = Math.max(0, Math.min(time, endTrim - 0.1))
-      onTrimChange(dragIndex, newStart, endTrim)
+      const newPosition = Math.max(0, Math.min(time, clipEndPosition - 0.1))
+      const timeDiff = newPosition - clip.position
+      
+      const newClips = [...clips]
+      newClips[clipIndex] = {
+        ...clip,
+        position: newPosition,
+        sourceStart: clip.sourceStart - timeDiff,
+        sourceEnd: clip.sourceEnd,
+      }
+      
+      if (clipIndex > 0) {
+        const prevClip = newClips[clipIndex - 1]
+        const prevClipEnd = prevClip.position + (prevClip.sourceEnd - prevClip.sourceStart)
+        if (newClips[clipIndex].position < prevClipEnd) {
+          newClips[clipIndex].position = prevClipEnd
+        }
+      }
+
+      onClipsChange(newClips)
     } else if (dragType === 'end') {
-      const startTrim = audioFiles[dragIndex].startTrim
-      const fileDuration = audioFiles[dragIndex].duration
-      const newEnd = Math.min(fileDuration, Math.max(time, startTrim + 0.1))
-      onTrimChange(dragIndex, startTrim, newEnd)
+      const newClipEndPosition = Math.max(clip.position + 0.1, Math.min(time, totalDuration))
+      const newClipDuration = newClipEndPosition - clip.position
+      
+      const newClips = [...clips]
+      newClips[clipIndex] = {
+        ...clip,
+        sourceEnd: clip.sourceStart + newClipDuration,
+      }
+
+      if (clipIndex < clips.length - 1) {
+        const nextClip = newClips[clipIndex + 1]
+        if (newClipEndPosition > nextClip.position) {
+          newClips[clipIndex].sourceEnd = clip.sourceStart + (nextClip.position - clip.position)
+        }
+      }
+
+      onClipsChange(newClips)
     } else if (dragType === 'move') {
       setCurrentTime(Math.max(0, Math.min(time, totalDuration)))
     }
-  }, [isDragging, dragType, dragIndex, audioFiles, onTrimChange, totalDuration, maxDuration])
+  }, [isDragging, dragType, dragClipId, clips, onClipsChange, totalDuration])
 
   const handleMouseUp = useCallback(() => {
     setIsDragging(false)
     setDragType(null)
-    setDragIndex(null)
+    setDragClipId(null)
   }, [])
 
-  const handleSegmentClick = useCallback((index: number) => {
-    setSelectedIndex(index)
+  const handleClipClick = useCallback((clipId: string) => {
+    setSelectedId(clipId)
   }, [])
+
+  const handleSplit = useCallback(() => {
+    const clipIndex = clips.findIndex(c => c.id === selectedId)
+    if (clipIndex === -1) return
+
+    const clip = clips[clipIndex]
+    const clipEndPosition = clip.position + (clip.sourceEnd - clip.sourceStart)
+    
+    if (currentTime <= clip.position || currentTime >= clipEndPosition) return
+
+    saveToHistory(clips)
+
+    const splitPositionInClip = currentTime - clip.position
+    
+    const newClip1 = {
+      ...clip,
+      sourceEnd: clip.sourceStart + splitPositionInClip,
+    }
+    
+    const newClip2 = {
+      ...clip,
+      id: Date.now().toString(),
+      sourceStart: clip.sourceStart + splitPositionInClip,
+      position: currentTime,
+    }
+
+    const newClips = [...clips]
+    newClips.splice(clipIndex, 1, newClip1, newClip2)
+    onClipsChange(newClips)
+    setSelectedId(newClip2.id)
+  }, [selectedId, clips, currentTime, onClipsChange, saveToHistory])
 
   const handleDelete = useCallback(() => {
-    if (selectedIndex !== null && audioFiles.length > 1) {
-      onRemoveFile(selectedIndex)
-      setSelectedIndex(null)
-    }
-  }, [selectedIndex, audioFiles.length, onRemoveFile])
+    if (selectedId === null || clips.length <= 1) return
+
+    saveToHistory(clips)
+    
+    const deletedClip = clips.find(c => c.id === selectedId)
+    if (!deletedClip) return
+    
+    const gapDuration = deletedClip.sourceEnd - deletedClip.sourceStart
+    const deletedIndex = clips.findIndex(c => c.id === selectedId)
+    
+    const newClipsAdjusted = clips.filter(c => c.id !== selectedId).map((c, index) => {
+      if (index >= deletedIndex) {
+        return {
+          ...c,
+          position: c.position - gapDuration,
+        }
+      }
+      return c
+    })
+
+    onClipsChange(newClipsAdjusted)
+    setSelectedId(null)
+  }, [selectedId, clips, onClipsChange, saveToHistory])
 
   const handlePlayPause = useCallback(() => {
     console.log('Play/Pause at', currentTime)
@@ -151,7 +231,7 @@ export function Timeline({ audioFiles, colors, onTrimChange, onRemoveFile }: Tim
 
   const handleReset = useCallback(() => {
     setCurrentTime(0)
-    setSelectedIndex(null)
+    setSelectedId(null)
   }, [])
 
   return (
@@ -159,13 +239,35 @@ export function Timeline({ audioFiles, colors, onTrimChange, onRemoveFile }: Tim
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-white font-semibold">🎬 时间轴</h3>
         <div className="flex items-center gap-3">
-          {selectedIndex !== null && (
-            <button
-              onClick={handleDelete}
-              className="px-3 py-1 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
-            >
-              删除选中片段
-            </button>
+          <button
+            onClick={handleUndo}
+            disabled={historyIndex <= 0}
+            className="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 text-white rounded-lg transition-colors"
+          >
+            ↩ 撤销
+          </button>
+          <button
+            onClick={handleRedo}
+            disabled={historyIndex >= history.length - 1}
+            className="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 text-white rounded-lg transition-colors"
+          >
+            ↪ 重做
+          </button>
+          {selectedId !== null && (
+            <>
+              <button
+                onClick={handleSplit}
+                className="px-3 py-1 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+              >
+                ✂ 分割
+              </button>
+              <button
+                onClick={handleDelete}
+                className="px-3 py-1 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
+              >
+                🗑 删除
+              </button>
+            </>
           )}
           <span className="text-gray-400 text-sm">
             总时长: {formatTime(totalDuration)}
@@ -183,7 +285,7 @@ export function Timeline({ audioFiles, colors, onTrimChange, onRemoveFile }: Tim
         <div className="flex overflow-x-auto pb-2">
           <div 
             className="flex-shrink-0 relative" 
-            style={{ width: `${getTimelinePosition(maxDuration) + 100}%`, minWidth: '100%' }}
+            style={{ width: `${getTimelinePosition(totalDuration) + 100}%`, minWidth: '100%' }}
           >
             <div className="flex border-b border-gray-700 pb-1 mb-2">
               {timeMarkers.map((time, index) => (
@@ -198,27 +300,31 @@ export function Timeline({ audioFiles, colors, onTrimChange, onRemoveFile }: Tim
               ))}
             </div>
 
-            <div className="flex items-end gap-1 h-20 relative">
-              {audioSegments.map((segment) => {
-                const segmentWidth = getTimelinePosition(segment.duration)
-                const segmentLeft = getTimelinePosition(segment.position)
+            <div className="flex items-end gap-0 h-24 relative">
+              {clips.map((clip) => {
+                const clipDuration = clip.sourceEnd - clip.sourceStart
+                const clipWidth = getTimelinePosition(clipDuration)
+                const clipLeft = getTimelinePosition(clip.position)
                 
-                const isSelected = selectedIndex === segment.index
+                const isSelected = selectedId === clip.id
+                const colorIndex = clips.findIndex(c => c.fileId === clip.fileId)
+                const color = colors[colorIndex % colors.length].wave
 
                 return (
                   <div
-                    key={segment.id}
-                    className={`relative flex-shrink-0 rounded-lg overflow-hidden cursor-pointer transition-all duration-150 ${
+                    key={clip.id}
+                    className={`relative flex-shrink-0 rounded overflow-hidden cursor-pointer transition-all duration-150 ${
                       isSelected ? 'ring-2 ring-white ring-offset-2 ring-offset-gray-900' : ''
                     }`}
                     style={{
-                      width: `${segmentWidth}%`,
-                      left: `${segmentLeft}%`,
-                      backgroundColor: `${segment.color}40`,
-                      borderLeft: `3px solid ${segment.color}`,
+                      width: `${clipWidth}%`,
+                      left: `${clipLeft}%`,
+                      backgroundColor: `${color}40`,
+                      borderLeft: `3px solid ${color}`,
                       height: '80%',
+                      marginLeft: '-0.5px',
                     }}
-                    onClick={() => handleSegmentClick(segment.index)}
+                    onClick={() => handleClipClick(clip.id)}
                   >
                     <div 
                       className="w-full h-full"
@@ -227,8 +333,8 @@ export function Timeline({ audioFiles, colors, onTrimChange, onRemoveFile }: Tim
                           90deg,
                           transparent,
                           transparent 3px,
-                          ${segment.color}50 3px,
-                          ${segment.color}50 6px
+                          ${color}50 3px,
+                          ${color}50 6px
                         )`,
                       }}
                     />
@@ -236,26 +342,26 @@ export function Timeline({ audioFiles, colors, onTrimChange, onRemoveFile }: Tim
                     <div className="absolute top-1 left-1 right-1">
                       <span 
                         className="text-xs font-medium px-2 py-0.5 rounded truncate block"
-                        style={{ backgroundColor: segment.color, color: 'white' }}
+                        style={{ backgroundColor: color, color: 'white' }}
                       >
-                        {segment.fileName}
+                        {clip.fileName}
                       </span>
                     </div>
 
                     <div className="absolute bottom-1 left-2 text-gray-300 text-xs">
-                      {formatTime(segment.position)} - {formatTime(segment.position + segment.duration)}
+                      {formatTime(clip.position)} - {formatTime(clip.position + clipDuration)}
                     </div>
 
                     <div
                       className="absolute top-0 left-0 w-3 h-full bg-white/70 cursor-ew-resize hover:bg-white transition-colors flex items-center justify-center"
-                      onMouseDown={(e) => handleMouseDown(e, 'start', segment.index)}
+                      onMouseDown={(e) => handleMouseDown(e, 'start', clip.id)}
                     >
                       <div className="w-0.5 h-6 bg-gray-600" />
                     </div>
 
                     <div
                       className="absolute top-0 right-0 w-3 h-full bg-white/70 cursor-ew-resize hover:bg-white transition-colors flex items-center justify-center"
-                      onMouseDown={(e) => handleMouseDown(e, 'end', segment.index)}
+                      onMouseDown={(e) => handleMouseDown(e, 'end', clip.id)}
                     >
                       <div className="w-0.5 h-6 bg-gray-600" />
                     </div>
@@ -267,21 +373,25 @@ export function Timeline({ audioFiles, colors, onTrimChange, onRemoveFile }: Tim
             <div className="flex mt-2">
               <div className="flex-shrink-0 w-16 text-gray-500 text-xs">轨道</div>
               <div className="flex-1 flex">
-                {audioFiles.map((file, index) => {
-                  const isSelected = selectedIndex === index
+                {clips.map((clip) => {
+                  const isSelected = selectedId === clip.id
+                  const colorIndex = clips.findIndex(c => c.fileId === clip.fileId)
+                  const color = colors[colorIndex % colors.length].wave
+                  const clipDuration = clip.sourceEnd - clip.sourceStart
+                  
                   return (
                     <div
-                      key={file.id}
+                      key={clip.id}
                       className={`flex-shrink-0 flex items-center gap-2 px-2 py-1 rounded ${
                         isSelected ? 'bg-gray-700' : ''
                       }`}
-                      style={{ width: `${(file.endTrim - file.startTrim) / maxDuration * 100}%` }}
+                      style={{ width: `${clipDuration / totalDuration * 100}%` }}
                     >
                       <div 
                         className="w-3 h-3 rounded-full flex-shrink-0"
-                        style={{ backgroundColor: colors[index % colors.length].wave }}
+                        style={{ backgroundColor: color }}
                       />
-                      <span className="text-gray-300 text-xs truncate">{file.fileName}</span>
+                      <span className="text-gray-300 text-xs truncate">{clip.fileName}</span>
                     </div>
                   )
                 })}
@@ -292,7 +402,7 @@ export function Timeline({ audioFiles, colors, onTrimChange, onRemoveFile }: Tim
 
         <div 
           className="absolute top-0 bottom-0 w-0.5 bg-red-500 shadow-lg shadow-red-500/50 z-10"
-          style={{ left: `${(currentTime / maxDuration) * 100}%` }}
+          style={{ left: `${(currentTime / totalDuration) * 100}%` }}
           onMouseDown={(e) => {
             e.stopPropagation()
             setIsDragging(true)
@@ -345,7 +455,7 @@ export function Timeline({ audioFiles, colors, onTrimChange, onRemoveFile }: Tim
       </div>
 
       <div className="mt-2 text-xs text-gray-500">
-        💡 提示: 拖动片段边缘可调整裁剪范围，点击片段选中，按 Delete 或点击删除按钮移除
+        💡 提示: 拖动片段边缘调整范围，点击选中，✂分割可删除中间片段，🗑删除移除选中片段，↩撤销操作
       </div>
     </div>
   )
