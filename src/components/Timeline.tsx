@@ -101,12 +101,19 @@ export function Timeline({ clips, colors, onClipsChange }: TimelineProps) {
   }, [])
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!isDragging || dragClipId === null || !timelineRef.current) return
+    if (!isDragging || !timelineRef.current) return
 
     const rect = timelineRef.current.getBoundingClientRect()
     const x = e.clientX - rect.left
-    const positionPercent = (x / rect.width) * 100
+    const positionPercent = Math.max(0, Math.min(100, (x / rect.width) * 100))
     const time = getTimeFromPosition(positionPercent)
+
+    if (dragType === 'move') {
+      setCurrentTime(Math.max(0, Math.min(time, totalDuration)))
+      return
+    }
+
+    if (dragClipId === null) return
 
     const clipIndex = clips.findIndex(c => c.id === dragClipId)
     if (clipIndex === -1) return
@@ -117,24 +124,16 @@ export function Timeline({ clips, colors, onClipsChange }: TimelineProps) {
 
     if (dragType === 'start') {
       const newPosition = Math.max(0, Math.min(time, clipEndPosition - 0.1))
-      const timeDiff = newPosition - clip.position
       
       const newClips = [...clips]
+      const timeDiff = newPosition - clip.position
       newClips[clipIndex] = {
         ...clip,
         position: newPosition,
-        sourceStart: clip.sourceStart - timeDiff,
+        sourceStart: Math.max(0, clip.sourceStart - timeDiff),
         sourceEnd: clip.sourceEnd,
       }
       
-      if (clipIndex > 0) {
-        const prevClip = newClips[clipIndex - 1]
-        const prevClipEnd = prevClip.position + (prevClip.sourceEnd - prevClip.sourceStart)
-        if (newClips[clipIndex].position < prevClipEnd) {
-          newClips[clipIndex].position = prevClipEnd
-        }
-      }
-
       onClipsChange(newClips)
     } else if (dragType === 'end') {
       const newClipEndPosition = Math.max(clip.position + 0.1, Math.min(time, totalDuration))
@@ -146,16 +145,7 @@ export function Timeline({ clips, colors, onClipsChange }: TimelineProps) {
         sourceEnd: clip.sourceStart + newClipDuration,
       }
 
-      if (clipIndex < clips.length - 1) {
-        const nextClip = newClips[clipIndex + 1]
-        if (newClipEndPosition > nextClip.position) {
-          newClips[clipIndex].sourceEnd = clip.sourceStart + (nextClip.position - clip.position)
-        }
-      }
-
       onClipsChange(newClips)
-    } else if (dragType === 'move') {
-      setCurrentTime(Math.max(0, Math.min(time, totalDuration)))
     }
   }, [isDragging, dragType, dragClipId, clips, onClipsChange, totalDuration])
 
@@ -165,11 +155,26 @@ export function Timeline({ clips, colors, onClipsChange }: TimelineProps) {
     setDragClipId(null)
   }, [])
 
-  const handleClipClick = useCallback((clipId: string) => {
-    setSelectedId(clipId)
-  }, [])
+  const handleTimelineClick = useCallback((e: React.MouseEvent) => {
+    if (!timelineRef.current) return
+    
+    const rect = timelineRef.current.getBoundingClientRect()
+    const x = e.clientX - rect.left
+    const positionPercent = (x / rect.width) * 100
+    const time = getTimeFromPosition(positionPercent)
+    setCurrentTime(Math.max(0, Math.min(time, totalDuration)))
+    
+    const clickedClip = clips.find(clip => {
+      const clipEndPosition = clip.position + (clip.sourceEnd - clip.sourceStart)
+      return time >= clip.position && time <= clipEndPosition
+    })
+    
+    setSelectedId(clickedClip?.id || null)
+  }, [clips, totalDuration])
 
   const handleSplit = useCallback(() => {
+    if (!selectedId) return
+
     const clipIndex = clips.findIndex(c => c.id === selectedId)
     if (clipIndex === -1) return
 
@@ -201,7 +206,7 @@ export function Timeline({ clips, colors, onClipsChange }: TimelineProps) {
   }, [selectedId, clips, currentTime, onClipsChange, saveToHistory])
 
   const handleDelete = useCallback(() => {
-    if (selectedId === null || clips.length <= 1) return
+    if (!selectedId) return
 
     saveToHistory(clips)
     
@@ -211,7 +216,9 @@ export function Timeline({ clips, colors, onClipsChange }: TimelineProps) {
     const gapDuration = deletedClip.sourceEnd - deletedClip.sourceStart
     const deletedIndex = clips.findIndex(c => c.id === selectedId)
     
-    const newClipsAdjusted = clips.filter(c => c.id !== selectedId).map((c, index) => {
+    const remainingClips = clips.filter(c => c.id !== selectedId)
+    
+    const adjustedClips = remainingClips.map((c, index) => {
       if (index >= deletedIndex) {
         return {
           ...c,
@@ -221,7 +228,7 @@ export function Timeline({ clips, colors, onClipsChange }: TimelineProps) {
       return c
     })
 
-    onClipsChange(newClipsAdjusted)
+    onClipsChange(adjustedClips)
     setSelectedId(null)
   }, [selectedId, clips, onClipsChange, saveToHistory])
 
@@ -278,6 +285,7 @@ export function Timeline({ clips, colors, onClipsChange }: TimelineProps) {
       <div 
         ref={timelineRef}
         className="relative cursor-crosshair"
+        onClick={handleTimelineClick}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
@@ -324,7 +332,10 @@ export function Timeline({ clips, colors, onClipsChange }: TimelineProps) {
                       height: '80%',
                       marginLeft: '-0.5px',
                     }}
-                    onClick={() => handleClipClick(clip.id)}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setSelectedId(clip.id)
+                    }}
                   >
                     <div 
                       className="w-full h-full"
@@ -455,7 +466,7 @@ export function Timeline({ clips, colors, onClipsChange }: TimelineProps) {
       </div>
 
       <div className="mt-2 text-xs text-gray-500">
-        💡 提示: 拖动片段边缘调整范围，点击选中，✂分割可删除中间片段，🗑删除移除选中片段，↩撤销操作
+        💡 提示: 点击时间轴定位播放头，拖动片段边缘调整范围，选中后可分割或删除
       </div>
     </div>
   )

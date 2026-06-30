@@ -505,7 +505,20 @@ function App() {
               <Timeline 
                 clips={clips} 
                 colors={colors}
-                onClipsChange={setClips}
+                onClipsChange={(newClips) => {
+                  setClips(newClips)
+                  
+                  const remainingFileIds = new Set(newClips.map(c => c.fileId))
+                  setAudioFiles(prev => {
+                    return prev.filter(f => {
+                      const shouldRemove = !remainingFileIds.has(f.id)
+                      if (shouldRemove && f.audioUrl) {
+                        URL.revokeObjectURL(f.audioUrl)
+                      }
+                      return !shouldRemove
+                    })
+                  })
+                }}
               />
             )}
           </div>
