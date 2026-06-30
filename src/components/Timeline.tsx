@@ -172,7 +172,7 @@ export function Timeline({ clips, colors, onClipsChange }: TimelineProps) {
     setSelectedId(clickedClip?.id || null)
   }, [clips, totalDuration])
 
-  const handleSplit = useCallback(() => {
+  const handleSplit = useCallback((deletePart: 'before' | 'after') => () => {
     if (!selectedId) return
 
     const clipIndex = clips.findIndex(c => c.id === selectedId)
@@ -187,22 +187,32 @@ export function Timeline({ clips, colors, onClipsChange }: TimelineProps) {
 
     const splitPositionInClip = currentTime - clip.position
     
-    const newClip1 = {
-      ...clip,
-      sourceEnd: clip.sourceStart + splitPositionInClip,
-    }
+    const newClips = [...clips]
     
-    const newClip2 = {
-      ...clip,
-      id: Date.now().toString(),
-      sourceStart: clip.sourceStart + splitPositionInClip,
-      position: currentTime,
+    if (deletePart === 'before') {
+      newClips[clipIndex] = {
+        ...clip,
+        position: currentTime,
+        sourceStart: clip.sourceStart + splitPositionInClip,
+      }
+    } else {
+      newClips[clipIndex] = {
+        ...clip,
+        sourceEnd: clip.sourceStart + splitPositionInClip,
+      }
+      
+      const gapDuration = clipEndPosition - currentTime
+      newClips.forEach((c, index) => {
+        if (index > clipIndex) {
+          newClips[index] = {
+            ...c,
+            position: c.position - gapDuration,
+          }
+        }
+      })
     }
 
-    const newClips = [...clips]
-    newClips.splice(clipIndex, 1, newClip1, newClip2)
     onClipsChange(newClips)
-    setSelectedId(newClip2.id)
   }, [selectedId, clips, currentTime, onClipsChange, saveToHistory])
 
   const handleDelete = useCallback(() => {
@@ -263,16 +273,22 @@ export function Timeline({ clips, colors, onClipsChange }: TimelineProps) {
           {selectedId !== null && (
             <>
               <button
-                onClick={handleSplit}
+                onClick={handleSplit('before')}
                 className="px-3 py-1 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
               >
-                ✂ 分割
+                ✂ 删除前面
+              </button>
+              <button
+                onClick={handleSplit('after')}
+                className="px-3 py-1 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+              >
+                ✂ 删除后面
               </button>
               <button
                 onClick={handleDelete}
                 className="px-3 py-1 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
               >
-                🗑 删除
+                🗑 删除片段
               </button>
             </>
           )}
@@ -466,7 +482,7 @@ export function Timeline({ clips, colors, onClipsChange }: TimelineProps) {
       </div>
 
       <div className="mt-2 text-xs text-gray-500">
-        💡 提示: 点击时间轴定位播放头，拖动片段边缘调整范围，选中后可分割或删除
+        💡 提示: 点击时间轴定位播放头，拖动片段边缘调整范围，选中后可删除前面/后面或整个片段
       </div>
     </div>
   )
