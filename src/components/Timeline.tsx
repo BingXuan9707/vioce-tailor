@@ -27,6 +27,8 @@ export function Timeline({ clips, colors, onClipsChange }: TimelineProps) {
   const [dragClipId, setDragClipId] = useState<string | null>(null)
   const [history, setHistory] = useState<Clip[][]>([])
   const [historyIndex, setHistoryIndex] = useState(-1)
+  const [deleteStart, setDeleteStart] = useState<number | null>(null)
+  const [deleteEnd, setDeleteEnd] = useState<number | null>(null)
   const timelineRef = useRef<HTMLDivElement>(null)
 
   const totalDuration = useMemo(() => {
@@ -172,75 +174,110 @@ export function Timeline({ clips, colors, onClipsChange }: TimelineProps) {
     setSelectedId(clickedClip?.id || null)
   }, [clips, totalDuration])
 
-  const handleSplit = useCallback((deletePart: 'before' | 'after') => () => {
-    if (!selectedId) return
-
-    const clipIndex = clips.findIndex(c => c.id === selectedId)
-    if (clipIndex === -1) return
-
-    const clip = clips[clipIndex]
-    const clipEndPosition = clip.position + (clip.sourceEnd - clip.sourceStart)
-    
-    if (currentTime <= clip.position || currentTime >= clipEndPosition) return
-
-    saveToHistory(clips)
-
-    const splitPositionInClip = currentTime - clip.position
-    
-    const newClips = [...clips]
-    
-    if (deletePart === 'before') {
-      newClips[clipIndex] = {
-        ...clip,
-        position: currentTime,
-        sourceStart: clip.sourceStart + splitPositionInClip,
+  const handleSetMarker = useCallback(() => {
+    if (deleteStart === null) {
+      setDeleteStart(currentTime)
+      setDeleteEnd(null)
+    } else if (deleteEnd === null) {
+      if (currentTime > deleteStart) {
+        setDeleteEnd(currentTime)
+      } else {
+        setDeleteEnd(deleteStart)
+        setDeleteStart(currentTime)
       }
     } else {
-      newClips[clipIndex] = {
-        ...clip,
-        sourceEnd: clip.sourceStart + splitPositionInClip,
+      setDeleteStart(currentTime)
+      setDeleteEnd(null)
+    }
+  }, [currentTime, deleteStart, deleteEnd])
+
+  const handleDelete = useCallback(() => {
+    if (deleteStart !== null && deleteEnd !== null) {
+      saveToHistory(clips)
+
+      const deleteDuration = deleteEnd - deleteStart
+      const newClips: Clip[] = []
+
+      for (const clip of clips) {
+        const clipStart = clip.position
+        const clipEnd = clip.position + (clip.sourceEnd - clip.sourceStart)
+        const clipDuration = clip.sourceEnd - clip.sourceStart
+
+        // Case 1: Clip is completely before delete range - keep as is
+        if (clipEnd <= deleteStart) {
+          newClips.push(clip)
+        }
+        // Case 2: Clip is completely after delete range - adjust position
+        else if (clipStart >= deleteEnd) {
+          newClips.push({
+            ...clip,
+            position: clip.position - deleteDuration,
+          })
+        }
+        // Case 3: Clip overlaps with delete range
+        else {
+          const deleteStartInClip = Math.max(0, deleteStart - clipStart)
+          const deleteEndInClip = Math.min(clipDuration, deleteEnd - clipStart)
+
+          // Part before delete range
+          if (deleteStartInClip > 0) {
+            newClips.push({
+              ...clip,
+              sourceEnd: clip.sourceStart + deleteStartInClip,
+            })
+          }
+
+          // Part after delete range
+          if (deleteEndInClip < clipDuration) {
+            newClips.push({
+              ...clip,
+              id: Date.now().toString() + Math.random(),
+              sourceStart: clip.sourceStart + deleteEndInClip,
+              sourceEnd: clip.sourceEnd,
+              position: deleteStart,
+            })
+          }
+        }
       }
-      
-      const gapDuration = clipEndPosition - currentTime
-      newClips.forEach((c, index) => {
-        if (index > clipIndex) {
-          newClips[index] = {
+
+      // Recalculate positions
+      let currentPosition = 0
+      const finalClips = newClips.map(clip => {
+        const duration = clip.sourceEnd - clip.sourceStart
+        const newClip = { ...clip, position: currentPosition }
+        currentPosition += duration
+        return newClip
+      })
+
+      onClipsChange(finalClips)
+      setDeleteStart(null)
+      setDeleteEnd(null)
+      setSelectedId(null)
+    } else if (selectedId) {
+      saveToHistory(clips)
+
+      const deletedClip = clips.find(c => c.id === selectedId)
+      if (!deletedClip) return
+
+      const gapDuration = deletedClip.sourceEnd - deletedClip.sourceStart
+      const deletedIndex = clips.findIndex(c => c.id === selectedId)
+
+      const remainingClips = clips.filter(c => c.id !== selectedId)
+
+      const adjustedClips = remainingClips.map((c, index) => {
+        if (index >= deletedIndex) {
+          return {
             ...c,
             position: c.position - gapDuration,
           }
         }
+        return c
       })
+
+      onClipsChange(adjustedClips)
+      setSelectedId(null)
     }
-
-    onClipsChange(newClips)
-  }, [selectedId, clips, currentTime, onClipsChange, saveToHistory])
-
-  const handleDelete = useCallback(() => {
-    if (!selectedId) return
-
-    saveToHistory(clips)
-    
-    const deletedClip = clips.find(c => c.id === selectedId)
-    if (!deletedClip) return
-    
-    const gapDuration = deletedClip.sourceEnd - deletedClip.sourceStart
-    const deletedIndex = clips.findIndex(c => c.id === selectedId)
-    
-    const remainingClips = clips.filter(c => c.id !== selectedId)
-    
-    const adjustedClips = remainingClips.map((c, index) => {
-      if (index >= deletedIndex) {
-        return {
-          ...c,
-          position: c.position - gapDuration,
-        }
-      }
-      return c
-    })
-
-    onClipsChange(adjustedClips)
-    setSelectedId(null)
-  }, [selectedId, clips, onClipsChange, saveToHistory])
+  }, [selectedId, clips, onClipsChange, saveToHistory, deleteStart, deleteEnd])
 
   const handlePlayPause = useCallback(() => {
     console.log('Play/Pause at', currentTime)
@@ -249,6 +286,8 @@ export function Timeline({ clips, colors, onClipsChange }: TimelineProps) {
   const handleReset = useCallback(() => {
     setCurrentTime(0)
     setSelectedId(null)
+    setDeleteStart(null)
+    setDeleteEnd(null)
   }, [])
 
   return (
@@ -270,33 +309,49 @@ export function Timeline({ clips, colors, onClipsChange }: TimelineProps) {
           >
             ↪ 重做
           </button>
-          {selectedId !== null && (
-            <>
-              <button
-                onClick={handleSplit('before')}
-                className="px-3 py-1 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
-              >
-                ✂ 删除前面
-              </button>
-              <button
-                onClick={handleSplit('after')}
-                className="px-3 py-1 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
-              >
-                ✂ 删除后面
-              </button>
-              <button
-                onClick={handleDelete}
-                className="px-3 py-1 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
-              >
-                🗑 删除片段
-              </button>
-            </>
+          <button
+            onClick={handleSetMarker}
+            className={`px-3 py-1 text-sm ${
+              deleteStart !== null && deleteEnd !== null
+                ? 'bg-green-600 hover:bg-green-700'
+                : deleteStart !== null
+                ? 'bg-yellow-600 hover:bg-yellow-700'
+                : 'bg-blue-600 hover:bg-blue-700'
+            } text-white rounded-lg transition-colors`}
+          >
+            {deleteStart !== null && deleteEnd !== null
+              ? '📍 重新选择'
+              : deleteStart !== null
+              ? `📍 设置结束点 (${formatTime(deleteStart)})`
+              : '📍 设置开始点'}
+          </button>
+          {(deleteStart !== null && deleteEnd !== null) && (
+            <button
+              onClick={handleDelete}
+              className="px-3 py-1 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
+            >
+              🗑 删除选中区域
+            </button>
+          )}
+          {selectedId !== null && deleteStart === null && (
+            <button
+              onClick={handleDelete}
+              className="px-3 py-1 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
+            >
+              🗑 删除片段
+            </button>
           )}
           <span className="text-gray-400 text-sm">
             总时长: {formatTime(totalDuration)}
           </span>
         </div>
       </div>
+
+      {(deleteStart !== null || deleteEnd !== null) && (
+        <div className="text-yellow-400 text-sm mb-2">
+          ⚠️ 删除区域: {deleteStart !== null ? formatTime(deleteStart) : '--:--'} - {deleteEnd !== null ? formatTime(deleteEnd) : '--:--'}
+        </div>
+      )}
 
       <div 
         ref={timelineRef}
@@ -427,6 +482,23 @@ export function Timeline({ clips, colors, onClipsChange }: TimelineProps) {
           </div>
         </div>
 
+        {deleteStart !== null && deleteEnd !== null && (
+          <div 
+            className="absolute top-0 bottom-0 bg-red-500/30 border-l-2 border-r-2 border-red-500 z-5 pointer-events-none"
+            style={{ 
+              left: `${(deleteStart / totalDuration) * 100}%`,
+              width: `${((deleteEnd - deleteStart) / totalDuration) * 100}%`
+            }}
+          />
+        )}
+
+        {deleteStart !== null && deleteEnd === null && (
+          <div 
+            className="absolute top-0 bottom-0 w-0.5 bg-yellow-500 z-5 pointer-events-none"
+            style={{ left: `${(deleteStart / totalDuration) * 100}%` }}
+          />
+        )}
+
         <div 
           className="absolute top-0 bottom-0 w-0.5 bg-red-500 shadow-lg shadow-red-500/50 z-10"
           style={{ left: `${(currentTime / totalDuration) * 100}%` }}
@@ -482,7 +554,7 @@ export function Timeline({ clips, colors, onClipsChange }: TimelineProps) {
       </div>
 
       <div className="mt-2 text-xs text-gray-500">
-        💡 提示: 点击时间轴定位播放头，拖动片段边缘调整范围，选中后可删除前面/后面或整个片段
+        💡 提示: 点击时间轴定位播放头 → 点击"设置开始点" → 再次定位 → 点击"设置结束点" → 点击"删除选中区域"
       </div>
     </div>
   )
