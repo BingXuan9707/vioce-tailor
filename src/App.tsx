@@ -5,7 +5,7 @@ import { Waveform } from './components/Waveform'
 import { PlaybackControls } from './components/PlaybackControls'
 import { TrimControls } from './components/TrimControls'
 import { ExportButton } from './components/ExportButton'
-import { exportAudio, exportMergedAudio, AudioSegment } from './utils/audioUtils'
+import { exportAudio, exportMergedAudio, AudioSegment, ExportFormat } from './utils/audioUtils'
 
 interface AudioFile {
   id: string
@@ -24,6 +24,8 @@ interface AudioFile {
 function App() {
   const [audioFiles, setAudioFiles] = useState<AudioFile[]>([])
   const [isMergingMode, setIsMergingMode] = useState(false)
+  const [exportFormat, setExportFormat] = useState<ExportFormat>('wav-compressed')
+  const [quality, setQuality] = useState<'low' | 'medium' | 'high'>('medium')
   const audioContextRef = useRef<AudioContext | null>(null)
 
   const getAudioContext = useCallback(() => {
@@ -205,9 +207,12 @@ function App() {
   const handleExportSingle = useCallback((index: number) => async () => {
     const file = audioFiles[index]
     if (file.buffer && file.endTrim > file.startTrim) {
-      await exportAudio(file.buffer, file.startTrim, file.endTrim, file.fileName)
+      await exportAudio(file.buffer, file.startTrim, file.endTrim, file.fileName, {
+        format: exportFormat,
+        quality,
+      })
     }
-  }, [audioFiles])
+  }, [audioFiles, exportFormat, quality])
 
   const handleExportMerged = useCallback(async () => {
     const segments: AudioSegment[] = audioFiles
@@ -221,9 +226,12 @@ function App() {
 
     if (segments.length >= 2) {
       const outputName = segments.map(s => s.fileName).join('_')
-      await exportMergedAudio(segments, outputName)
+      await exportMergedAudio(segments, outputName, {
+        format: exportFormat,
+        quality,
+      })
     }
-  }, [audioFiles])
+  }, [audioFiles, exportFormat, quality])
 
   const canExportSingle = (file: AudioFile) => file.buffer && file.endTrim > file.startTrim && file.isLoaded
   const canExportMerged = audioFiles.filter(f => canExportSingle(f)).length >= 2
@@ -295,6 +303,42 @@ function App() {
                     <span>导出拼接音频</span>
                   </button>
                 )}
+              </div>
+            </div>
+
+            <div className="bg-white rounded-xl p-4 shadow-lg">
+              <h3 className="text-sm font-medium text-gray-700 mb-3">导出设置</h3>
+              <div className="flex flex-wrap gap-6">
+                <div className="flex items-center gap-3">
+                  <label className="text-sm text-gray-600">格式:</label>
+                  <select
+                    value={exportFormat}
+                    onChange={(e) => setExportFormat(e.target.value as ExportFormat)}
+                    className="px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="wav-compressed">WAV (压缩)</option>
+                    <option value="wav">WAV (无损)</option>
+                  </select>
+                </div>
+                {exportFormat === 'wav-compressed' && (
+                  <div className="flex items-center gap-3">
+                    <label className="text-sm text-gray-600">质量:</label>
+                    <select
+                      value={quality}
+                      onChange={(e) => setQuality(e.target.value as 'low' | 'medium' | 'high')}
+                      className="px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      <option value="low">低质量 (11kHz/8位，最小文件)</option>
+                      <option value="medium">中等质量 (22kHz/16位，推荐)</option>
+                      <option value="high">高质量 (44kHz/16位，较大文件)</option>
+                    </select>
+                  </div>
+                )}
+                <div className="text-sm text-gray-500">
+                  {exportFormat === 'wav-compressed' 
+                    ? `压缩模式通过降低采样率减小文件大小，质量越低文件越小`
+                    : `无损模式保留原始音质，文件较大`}
+                </div>
               </div>
             </div>
 
