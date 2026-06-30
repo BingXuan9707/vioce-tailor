@@ -48,6 +48,13 @@ export function parseTime(timeStr: string): number {
   return num >= 0 ? num : 0
 }
 
+export interface AudioSegment {
+  buffer: AudioBuffer
+  start: number
+  end: number
+  fileName: string
+}
+
 export async function exportAudio(
   audioBuffer: AudioBuffer,
   start: number,
@@ -142,4 +149,73 @@ function downloadBlob(blob: Blob, filename: string): void {
   a.click()
   document.body.removeChild(a)
   URL.revokeObjectURL(url)
+}
+
+export async function exportMergedAudio(
+  segments: AudioSegment[],
+  outputFileName: string
+): Promise<void> {
+  if (segments.length === 0) {
+    return
+  }
+
+  const sampleRate = segments[0].buffer.sampleRate
+  const numberOfChannels = segments[0].buffer.numberOfChannels
+
+  let totalDuration = 0
+  const audioBuffers: AudioBuffer[] = []
+
+  for (const segment of segments) {
+    const startSample = Math.floor(segment.start * segment.buffer.sampleRate)
+    const endSample = Math.floor(segment.end * segment.buffer.sampleRate)
+    const duration = endSample - startSample
+
+    const offlineContext = new OfflineAudioContext(
+      segment.buffer.numberOfChannels,
+      duration,
+      segment.buffer.sampleRate
+    )
+
+    const trimmedBuffer = offlineContext.createBuffer(
+      segment.buffer.numberOfChannels,
+      duration,
+      segment.buffer.sampleRate
+    )
+
+    for (let channel = 0; channel < segment.buffer.numberOfChannels; channel++) {
+      const channelData = segment.buffer.getChannelData(channel)
+      const newChannelData = trimmedBuffer.getChannelData(channel)
+      for (let i = 0; i < duration; i++) {
+        newChannelData[i] = channelData[startSample + i]
+      }
+    }
+
+    audioBuffers.push(trimmedBuffer)
+    totalDuration += duration / segment.buffer.sampleRate
+  }
+
+  const totalSamples = Math.floor(totalDuration * sampleRate)
+  const mergedContext = new OfflineAudioContext(numberOfChannels, totalSamples, sampleRate)
+  const mergedBuffer = mergedContext.createBuffer(numberOfChannels, totalSamples, sampleRate)
+
+  let currentOffset = 0
+  for (const buffer of audioBuffers) {
+    const bufferSamples = buffer.length
+
+    for (let channel = 0; channel < numberOfChannels; channel++) {
+      const channelData = mergedBuffer.getChannelData(channel)
+      const sourceChannelData = buffer.getChannelData(channel)
+
+      for (let i = 0; i < bufferSamples; i++) {
+        if (currentOffset + i < totalSamples) {
+          channelData[currentOffset + i] = sourceChannelData[i]
+        }
+      }
+    }
+
+    currentOffset += bufferSamples
+  }
+
+  const wavData = audioBufferToWav(mergedBuffer)
+  downloadBlob(wavData, `${outputFileName}_merged.wav`)
 }

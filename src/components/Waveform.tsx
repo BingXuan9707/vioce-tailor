@@ -12,6 +12,9 @@ interface WaveformProps {
   endTrim: number
   isPlaying: boolean
   currentTime: number
+  waveColor?: string
+  progressColor?: string
+  regionColor?: string
 }
 
 export function Waveform({
@@ -24,6 +27,9 @@ export function Waveform({
   endTrim,
   isPlaying,
   currentTime,
+  waveColor = '#4F46E5',
+  progressColor = '#818CF8',
+  regionColor = 'rgba(99, 102, 241, 0.3)',
 }: WaveformProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const wavesurferRef = useRef<WaveSurfer | null>(null)
@@ -55,8 +61,8 @@ export function Waveform({
 
     const wavesurfer = WaveSurfer.create({
       container: containerRef.current,
-      waveColor: '#4F46E5',
-      progressColor: '#818CF8',
+      waveColor,
+      progressColor,
       cursorColor: '#EF4444',
       barWidth: 2,
       barGap: 1,
@@ -76,7 +82,7 @@ export function Waveform({
         regionRef.current = regionsPlugin.addRegion({
           start: startTrim,
           end: endTrim,
-          color: 'rgba(99, 102, 241, 0.3)',
+          color: regionColor,
           drag: true,
           resize: true,
         })
@@ -159,7 +165,7 @@ export function Waveform({
   }, [endTrim])
 
   return (
-    <div className="bg-gray-900 rounded-xl p-4 shadow-lg">
+    <div className="wavesurfer-container-wrapper">
       <div ref={containerRef} className="wavesurfer-container" />
     </div>
   )

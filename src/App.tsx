@@ -5,95 +5,243 @@ import { Waveform } from './components/Waveform'
 import { PlaybackControls } from './components/PlaybackControls'
 import { TrimControls } from './components/TrimControls'
 import { ExportButton } from './components/ExportButton'
-import { exportAudio } from './utils/audioUtils'
+import { exportAudio, exportMergedAudio, AudioSegment } from './utils/audioUtils'
+
+interface AudioFile {
+  id: string
+  file: File
+  fileName: string
+  audioUrl: string
+  duration: number
+  currentTime: number
+  isPlaying: boolean
+  startTrim: number
+  endTrim: number
+  isLoaded: boolean
+  buffer: AudioBuffer | null
+}
 
 function App() {
-  const [file, setFile] = useState<File | null>(null)
-  const [fileName, setFileName] = useState('')
-  const [audioUrl, setAudioUrl] = useState('')
-  const [duration, setDuration] = useState(0)
-  const [currentTime, setCurrentTime] = useState(0)
-  const [isPlaying, setIsPlaying] = useState(false)
-  const [startTrim, setStartTrim] = useState(0)
-  const [endTrim, setEndTrim] = useState(0)
-  const [isLoaded, setIsLoaded] = useState(false)
-  
-  const audioBufferRef = useRef<AudioBuffer | null>(null)
+  const [audioFiles, setAudioFiles] = useState<AudioFile[]>([])
+  const [isMergingMode, setIsMergingMode] = useState(false)
+  const audioContextRef = useRef<AudioContext | null>(null)
 
-  const handleFileSelect = useCallback(async (selectedFile: File) => {
-    setFile(selectedFile)
-    setFileName(selectedFile.name.replace(/\.[^/.]+$/, ''))
-    
+  const getAudioContext = useCallback(() => {
+    if (!audioContextRef.current) {
+      audioContextRef.current = new AudioContext()
+    }
+    return audioContextRef.current
+  }, [])
+
+  const handleFileSelect = useCallback(async (selectedFile: File, index?: number) => {
+    const fileName = selectedFile.name.replace(/\.[^/.]+$/, '')
     const url = URL.createObjectURL(selectedFile)
-    setAudioUrl(url)
-    setIsLoaded(false)
-    
-    const audioContext = new AudioContext()
+    const audioContext = getAudioContext()
     const arrayBuffer = await selectedFile.arrayBuffer()
     const audioBuffer = await audioContext.decodeAudioData(arrayBuffer)
-    audioBufferRef.current = audioBuffer
-    
-    setDuration(audioBuffer.duration)
-    setEndTrim(audioBuffer.duration)
-    setStartTrim(0)
-    setCurrentTime(0)
-  }, [])
 
-  const handleAudioReady = useCallback((audioDuration: number) => {
-    setDuration(audioDuration)
-    setEndTrim(audioDuration)
-    setIsLoaded(true)
-  }, [])
-
-  const handleTimeUpdate = useCallback((time: number) => {
-    setCurrentTime(time)
-    if (isPlaying && time >= endTrim) {
-      setIsPlaying(false)
-      setCurrentTime(startTrim)
+    const newAudioFile: AudioFile = {
+      id: Date.now().toString(),
+      file: selectedFile,
+      fileName,
+      audioUrl: url,
+      duration: audioBuffer.duration,
+      currentTime: 0,
+      isPlaying: false,
+      startTrim: 0,
+      endTrim: audioBuffer.duration,
+      isLoaded: false,
+      buffer: audioBuffer,
     }
-  }, [isPlaying, endTrim, startTrim])
 
-  const handleRegionUpdate = useCallback((start: number, end: number) => {
-    setStartTrim(start)
-    setEndTrim(end)
+    if (index !== undefined) {
+      setAudioFiles(prev => {
+        const newFiles = [...prev]
+        newFiles[index] = newAudioFile
+        return newFiles
+      })
+    } else {
+      setAudioFiles(prev => [...prev, newAudioFile])
+    }
+  }, [getAudioContext])
+
+  const handleAddAnotherFile = useCallback(() => {
+    setIsMergingMode(true)
   }, [])
 
-  const handlePlayPause = useCallback(() => {
-    if (!isPlaying) {
-      if (currentTime >= endTrim || currentTime < startTrim) {
-        setCurrentTime(startTrim)
+  const handleAudioReady = useCallback((index: number) => (duration: number) => {
+    setAudioFiles(prev => {
+      const newFiles = [...prev]
+      newFiles[index] = {
+        ...newFiles[index],
+        duration,
+        endTrim: duration,
+        isLoaded: true,
       }
+      return newFiles
+    })
+  }, [])
+
+  const handleTimeUpdate = useCallback((index: number) => (time: number) => {
+    setAudioFiles(prev => {
+      const newFiles = [...prev]
+      const file = newFiles[index]
+      
+      if (file.isPlaying && time >= file.endTrim) {
+        newFiles[index] = {
+          ...file,
+          currentTime: time,
+          isPlaying: false,
+        }
+      } else {
+        newFiles[index] = {
+          ...file,
+          currentTime: time,
+        }
+      }
+      return newFiles
+    })
+  }, [])
+
+  const handleRegionUpdate = useCallback((index: number) => (start: number, end: number) => {
+    setAudioFiles(prev => {
+      const newFiles = [...prev]
+      newFiles[index] = {
+        ...newFiles[index],
+        startTrim: start,
+        endTrim: end,
+      }
+      return newFiles
+    })
+  }, [])
+
+  const handlePlayPause = useCallback((index: number) => () => {
+    setAudioFiles(prev => {
+      const newFiles = [...prev]
+      const file = newFiles[index]
+      
+      if (!file.isPlaying) {
+        if (file.currentTime >= file.endTrim || file.currentTime < file.startTrim) {
+          newFiles[index] = {
+            ...file,
+            currentTime: file.startTrim,
+            isPlaying: true,
+          }
+        } else {
+          newFiles[index] = {
+            ...file,
+            isPlaying: true,
+          }
+        }
+      } else {
+        newFiles[index] = {
+          ...file,
+          isPlaying: false,
+        }
+      }
+      
+      newFiles.forEach((f, i) => {
+        if (i !== index) {
+          newFiles[i] = { ...f, isPlaying: false }
+        }
+      })
+      
+      return newFiles
+    })
+  }, [])
+
+  const handleSeekAndPlay = useCallback((index: number) => (time: number) => {
+    setAudioFiles(prev => {
+      const newFiles = [...prev]
+      newFiles[index] = {
+        ...newFiles[index],
+        currentTime: time,
+        isPlaying: true,
+      }
+      
+      newFiles.forEach((f, i) => {
+        if (i !== index) {
+          newFiles[i] = { ...f, isPlaying: false }
+        }
+      })
+      
+      return newFiles
+    })
+  }, [])
+
+  const handleStartChange = useCallback((index: number) => (time: number) => {
+    setAudioFiles(prev => {
+      const newFiles = [...prev]
+      newFiles[index] = {
+        ...newFiles[index],
+        startTrim: time,
+      }
+      return newFiles
+    })
+  }, [])
+
+  const handleEndChange = useCallback((index: number) => (time: number) => {
+    setAudioFiles(prev => {
+      const newFiles = [...prev]
+      newFiles[index] = {
+        ...newFiles[index],
+        endTrim: time,
+      }
+      return newFiles
+    })
+  }, [])
+
+  const handleRemoveFile = useCallback((index: number) => () => {
+    setAudioFiles(prev => {
+      const newFiles = [...prev]
+      const removedFile = newFiles[index]
+      if (removedFile.audioUrl) {
+        URL.revokeObjectURL(removedFile.audioUrl)
+      }
+      return newFiles.filter((_, i) => i !== index)
+    })
+  }, [])
+
+  const handleExportSingle = useCallback((index: number) => async () => {
+    const file = audioFiles[index]
+    if (file.buffer && file.endTrim > file.startTrim) {
+      await exportAudio(file.buffer, file.startTrim, file.endTrim, file.fileName)
     }
-    setIsPlaying(!isPlaying)
-  }, [currentTime, endTrim, startTrim])
+  }, [audioFiles])
 
-  const handleSeekAndPlay = useCallback((time: number) => {
-    setCurrentTime(time)
-    setIsPlaying(true)
-  }, [])
+  const handleExportMerged = useCallback(async () => {
+    const segments: AudioSegment[] = audioFiles
+      .filter(f => f.buffer && f.endTrim > f.startTrim)
+      .map(f => ({
+        buffer: f.buffer!,
+        start: f.startTrim,
+        end: f.endTrim,
+        fileName: f.fileName,
+      }))
 
-  const handleExport = useCallback(async () => {
-    if (audioBufferRef.current && file) {
-      await exportAudio(audioBufferRef.current, startTrim, endTrim, fileName)
+    if (segments.length >= 2) {
+      const outputName = segments.map(s => s.fileName).join('_')
+      await exportMergedAudio(segments, outputName)
     }
-  }, [startTrim, endTrim, fileName, file])
+  }, [audioFiles])
 
-  const handleStartChange = useCallback((time: number) => {
-    setStartTrim(time)
-  }, [])
+  const canExportSingle = (file: AudioFile) => file.buffer && file.endTrim > file.startTrim && file.isLoaded
+  const canExportMerged = audioFiles.filter(f => canExportSingle(f)).length >= 2
 
-  const handleEndChange = useCallback((time: number) => {
-    setEndTrim(time)
-  }, [])
-
-  const canExport = file && endTrim > startTrim && isLoaded
+  const colors = [
+    { wave: '#4F46E5', progress: '#818CF8', region: 'rgba(99, 102, 241, 0.3)' },
+    { wave: '#10B981', progress: '#34D399', region: 'rgba(16, 185, 129, 0.3)' },
+    { wave: '#F59E0B', progress: '#FBBF24', region: 'rgba(245, 158, 11, 0.3)' },
+    { wave: '#EF4444', progress: '#F87171', region: 'rgba(239, 68, 68, 0.3)' },
+    { wave: '#8B5CF6', progress: '#A78BFA', region: 'rgba(139, 92, 246, 0.3)' },
+  ]
 
   return (
     <div className="min-h-screen bg-gray-100">
       <Header />
       
       <main className="max-w-6xl mx-auto px-4 py-8">
-        {!file ? (
+        {audioFiles.length === 0 ? (
           <div className="max-w-2xl mx-auto">
             <AudioUploader onFileSelect={handleFileSelect} />
             
@@ -116,67 +264,165 @@ function App() {
                   <span className="text-indigo-500">4.</span>
                   <span>点击导出按钮下载裁剪后的音频!</span>
                 </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-indigo-500">5.</span>
+                  <span>点击"融合"按钮添加更多音频文件进行拼接!</span>
+                </li>
               </ul>
             </div>
           </div>
         ) : (
           <div className="space-y-6">
-            <div className="bg-white rounded-xl p-4 shadow-lg">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 bg-indigo-100 rounded-lg flex items-center justify-center">
-                    <span className="text-2xl">🎵</span>
-                  </div>
-                  <div>
-                    <p className="font-medium text-gray-800">{file.name}</p>
-                    <p className="text-sm text-gray-500">
-                      {(file.size / 1024 / 1024).toFixed(2)} MB
-                    </p>
-                  </div>
-                </div>
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <h2 className="text-xl font-semibold text-gray-800">
+                已上传 {audioFiles.length} 个音频文件
+              </h2>
+              <div className="flex gap-3">
                 <button
-                  onClick={() => {
-                    setFile(null)
-                    setAudioUrl('')
-                    setIsLoaded(false)
-                    audioBufferRef.current = null
-                  }}
-                  className="px-4 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors"
+                  onClick={handleAddAnotherFile}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors flex items-center gap-2"
                 >
-                  更换文件
+                  <span>+</span>
+                  <span>添加音频文件</span>
                 </button>
+                {audioFiles.length >= 2 && (
+                  <button
+                    onClick={handleExportMerged}
+                    disabled={!canExportMerged}
+                    className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white rounded-lg transition-colors flex items-center gap-2"
+                  >
+                    <span>🎵</span>
+                    <span>导出拼接音频</span>
+                  </button>
+                )}
               </div>
             </div>
 
-            <Waveform
-              audioUrl={audioUrl}
-              onReady={handleAudioReady}
-              onTimeUpdate={handleTimeUpdate}
-              onRegionUpdate={handleRegionUpdate}
-              onSeekAndPlay={handleSeekAndPlay}
-              startTrim={startTrim}
-              endTrim={endTrim}
-              isPlaying={isPlaying}
-              currentTime={currentTime}
-            />
+            {audioFiles.map((file, index) => (
+              <div key={file.id} className="bg-white rounded-xl shadow-lg overflow-hidden border-l-4" style={{ borderLeftColor: colors[index % colors.length].wave }}>
+                <div className="p-4 bg-gray-50 border-b">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div 
+                        className="w-12 h-12 rounded-lg flex items-center justify-center"
+                        style={{ backgroundColor: `${colors[index % colors.length].wave}20` }}
+                      >
+                        <span className="text-2xl">{index + 1}</span>
+                      </div>
+                      <div>
+                        <p className="font-medium text-gray-800">文件 {index + 1}: {file.fileName}</p>
+                        <p className="text-sm text-gray-500">
+                          {(file.file.size / 1024 / 1024).toFixed(2)} MB
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      {audioFiles.length > 1 && (
+                        <button
+                          onClick={handleRemoveFile(index)}
+                          className="px-3 py-1 text-sm bg-red-100 hover:bg-red-200 text-red-700 rounded-lg transition-colors"
+                        >
+                          删除
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleFileSelect(file.file, index)}
+                        className="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors"
+                      >
+                        更换
+                      </button>
+                    </div>
+                  </div>
+                </div>
 
-            <PlaybackControls
-              isPlaying={isPlaying}
-              currentTime={currentTime}
-              duration={duration}
-              onPlayPause={handlePlayPause}
-              onSeekAndPlay={handleSeekAndPlay}
-            />
+                <div className="p-6 space-y-6">
+                  <div className="bg-gray-900 rounded-xl p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-sm text-gray-400">波形图</span>
+                      <span 
+                        className="text-sm px-2 py-1 rounded"
+                        style={{ backgroundColor: `${colors[index % colors.length].wave}30`, color: colors[index % colors.length].wave }}
+                      >
+                        文件 {index + 1}
+                      </span>
+                    </div>
+                    <Waveform
+                      audioUrl={file.audioUrl}
+                      onReady={handleAudioReady(index)}
+                      onTimeUpdate={handleTimeUpdate(index)}
+                      onRegionUpdate={handleRegionUpdate(index)}
+                      onSeekAndPlay={handleSeekAndPlay(index)}
+                      startTrim={file.startTrim}
+                      endTrim={file.endTrim}
+                      isPlaying={file.isPlaying}
+                      currentTime={file.currentTime}
+                      waveColor={colors[index % colors.length].wave}
+                      progressColor={colors[index % colors.length].progress}
+                      regionColor={colors[index % colors.length].region}
+                    />
+                  </div>
 
-            <TrimControls
-              startTrim={startTrim}
-              endTrim={endTrim}
-              duration={duration}
-              onStartChange={handleStartChange}
-              onEndChange={handleEndChange}
-            />
+                  <PlaybackControls
+                    isPlaying={file.isPlaying}
+                    currentTime={file.currentTime}
+                    duration={file.duration}
+                    onPlayPause={handlePlayPause(index)}
+                    onSeekAndPlay={handleSeekAndPlay(index)}
+                  />
 
-            <ExportButton onExport={handleExport} disabled={!canExport} />
+                  <TrimControls
+                    startTrim={file.startTrim}
+                    endTrim={file.endTrim}
+                    duration={file.duration}
+                    onStartChange={handleStartChange(index)}
+                    onEndChange={handleEndChange(index)}
+                  />
+
+                  <ExportButton 
+                    onExport={handleExportSingle(index)} 
+                    disabled={!canExportSingle(file)} 
+                    label="导出当前文件"
+                  />
+                </div>
+              </div>
+            ))}
+
+            {audioFiles.length >= 2 && (
+              <div className="bg-gradient-to-r from-indigo-50 to-green-50 rounded-xl p-6">
+                <h3 className="font-semibold text-gray-800 mb-3">🎵 拼接预览</h3>
+                <div className="flex flex-wrap items-center gap-2">
+                  {audioFiles.map((file, index) => (
+                    <div key={file.id} className="flex items-center">
+                      <div 
+                        className="px-3 py-1 rounded-full text-sm font-medium"
+                        style={{ backgroundColor: `${colors[index % colors.length].wave}20`, color: colors[index % colors.length].wave }}
+                      >
+                        {file.fileName} ({(file.endTrim - file.startTrim).toFixed(2)}s)
+                      </div>
+                      {index < audioFiles.length - 1 && (
+                        <span className="mx-2 text-gray-400">→</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-3 text-sm text-gray-600">
+                  总时长: {audioFiles.reduce((acc, f) => acc + (f.endTrim - f.startTrim), 0).toFixed(2)} 秒
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {isMergingMode && audioFiles.length > 0 && (
+          <div className="mt-6 bg-white rounded-xl p-6 shadow-lg">
+            <h3 className="text-lg font-semibold text-gray-800 mb-4">添加另一个音频文件进行拼接</h3>
+            <AudioUploader onFileSelect={handleFileSelect} />
+            <button
+              onClick={() => setIsMergingMode(false)}
+              className="mt-4 px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
+            >
+              取消
+            </button>
           </div>
         )}
       </main>
