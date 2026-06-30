@@ -456,7 +456,31 @@ function App() {
             ))}
 
             {audioFiles.length >= 2 && (
-              <Timeline audioFiles={audioFiles} colors={colors} />
+              <Timeline 
+                audioFiles={audioFiles} 
+                colors={colors}
+                onTrimChange={(index, start, end) => {
+                  setAudioFiles(prev => {
+                    const newFiles = [...prev]
+                    newFiles[index] = {
+                      ...newFiles[index],
+                      startTrim: start,
+                      endTrim: end,
+                    }
+                    return newFiles
+                  })
+                }}
+                onRemoveFile={(index) => {
+                  setAudioFiles(prev => {
+                    const newFiles = [...prev]
+                    const removedFile = newFiles[index]
+                    if (removedFile && removedFile.audioUrl) {
+                      URL.revokeObjectURL(removedFile.audioUrl)
+                    }
+                    return newFiles.filter((_, i) => i !== index)
+                  })
+                }}
+              />
             )}
           </div>
         )}
